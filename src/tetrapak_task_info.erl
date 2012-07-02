@@ -1,85 +1,69 @@
 -module(tetrapak_task_info).
 -export([run/2]).
+-compile([export_all]).
 
-%% ------------------------------------------------------------
-%% --
+-type application() :: atom().
+-type dep_tree() :: {application(), Dependencies :: [dep_tree()]}.
 
-run("info:depsastree", _) ->
-    tetrapak:require("build:erlang"),
-    start_deps_get_deps_as_tree(tetrapak:get("config:appfile:name"));
+run("info:deps", _) ->
+    show_flat(get_dependencies_in_start_order(tetrapak:get("config:appfile:name")));
+run("info:deps:tree", _) ->
+    show_tree([get_dependencies(tetrapak:get("config:appfile:name"))], []).
 
-run("info:depsaslist", _) ->
-    tetrapak:require("build:erlang"),
-    start_deps_get_deps_as_list(tetrapak:get("config:appfile:name")).
+show_flat(Applications) ->
+    Names = lists:map(fun atom_to_list/1, Applications),
+    io:put_chars(string:join(Names, ", ")),
+    io:nl().
 
-start_deps_get_deps_as_tree(App) ->
-    Tree = start_deps_get_deps_first(false, App, tree_fun()),
-    io:format(user, "application tree: ~p~n", [Tree]),
-    {done, []}.
+show_tree([], _Depth) ->
+    ok;
+show_tree([{App, Dependencies} | Rest], Depth) ->
+    case Depth of
+        [] -> ok;
+        _  ->
+            lists:foreach(fun (true)  -> io:put_chars("|   ");
+                              (false) -> io:put_chars("    ")
+                          end, tl(lists:reverse(Depth))),
+            case Rest of
+                [] -> io:put_chars("`-- ");
+                _  -> io:put_chars("|-- ")
+            end
+    end,
+    case Dependencies of
+        {not_found, _} ->
+            io:format("~s [NOT INSTALLED]~n", [App]);
+        _Deps ->
+            io:format("~s~n", [App]),
+            show_tree(Dependencies, [(Rest /= []) | Depth])
+    end,
+    show_tree(Rest, Depth).
 
-start_deps_get_deps_as_list(App) ->
-    List = start_deps_get_deps_first(true, App, list_fun()),
-    io:format(user, "application start list: ~p~n", [lists:reverse(List)]),
-    {done, []}.
-
-start_deps_get_deps_first(Unique, App, Fun) ->
-    try start_deps_get_deps(Unique, App, Fun) of
-        {Result, _StartedApps} ->
-            Result
-    catch
-        throw:{failed, Error} ->
-            Error
+-spec get_dependencies(application()) -> dep_tree().
+get_dependencies(App) ->
+    case application:load(App) of
+        ok -> get_deps(App);
+        {error, {already_loaded, App}} -> get_deps(App);
+        {error, Reason} -> {App, {not_found, Reason}}
     end.
 
-start_deps_get_deps(Unique, App, Fun) ->
-    start_deps_get_deps(Unique, App, Fun, Fun(init, App)).
+get_deps(App) ->
+    {ok, Deps} = application:get_key(App, applications),
+    GoodDeps = [get_dependencies(D) || D <- lists:sort(Deps),
+                   not lists:member(D, [kernel, stdlib])],
+    {App, GoodDeps}.
 
-start_deps_get_deps(Unique, App, Fun, FunState) ->
-    start_deps_get_deps(Unique, App, Fun, FunState, [kernel, stdlib]).
-start_deps_get_deps(Unique, App, Fun, FunState, StartedApps) ->
-    application:load(App),
-    case application:get_key(App, applications) of
-        {ok, Deps} ->
-            NotStartedDeps = check_started(Deps, StartedApps),
-            {StartedDeps, NewStartedApps2} =
-                lists:foldl(fun(DepApp, {StartedDeps, OldStartedApps}) ->
-                                    case lists:member(DepApp, OldStartedApps) and Unique of
-                                        false ->
-                                            {NewDeps, NewStartedApps1} =
-                                                start_deps_get_deps(Unique, DepApp, Fun, Fun(init, DepApp), OldStartedApps),
-                                            {[NewDeps | StartedDeps], NewStartedApps1};
-                                        true ->
-                                            {StartedDeps, OldStartedApps}
-                                    end
-                            end, {[], StartedApps}, NotStartedDeps),
-            %% This is not a same function, because it can be a recursion function, that doesn't
-            %% try to start a depencies at the same time
-            {Fun(ready, Fun({add_dep, StartedDeps}, FunState)), [App | NewStartedApps2]};
-        Error ->
-            throw({failed, {App, Error}})
-    end.
+-spec get_dependencies_in_start_order(application()) -> [application()].
+get_dependencies_in_start_order(App) ->
+    start_order([get_dependencies(App)], []).
 
-check_started(Deps, StartedApps) ->
-    [Dep || Dep <- Deps, (not lists:member(Dep, StartedApps)) ].
-
-tree_fun() ->
-    fun (init, App) ->
-            {App, []};
-        ({add_dep, DepApp}, {App, Deps}) ->
-            {App, lists:flatten([DepApp | Deps])};
-        (ready, {_App, _Deps} = State) ->
-            State;
-        (Command, State) ->
-            io:format(user, "command: ~p~n state: ~p~n", [Command, State])
-    end.
-
-list_fun() ->
-    fun (init, App) ->
-            [App];
-        ({add_dep, DepApp}, Deps) ->
-            lists:flatten(Deps ++ [DepApp]);
-        (ready, Deps) ->
-            Deps;
-        (Command, State) ->
-            io:format(user, "command: ~p~n state: ~p~n", [Command, State])
-    end.
+-spec start_order([dep_tree()], [application()]) -> [application()].
+start_order([{App, {not_found, Error}} | _Rest], _Started) ->
+    tetrapak:fail("Dependency ~s not installed. Rerun with -tree to see what depends on it.~n   ~p",
+                  [App, Error]);
+start_order([{App, Deps} | Rest], Started) ->
+    case lists:member(App, Started) of
+        true  -> start_order(Rest, Started);
+        false -> start_order(Rest, [App | start_order(Deps, Started)])
+    end;
+start_order([], Started) ->
+    lists:reverse(Started).

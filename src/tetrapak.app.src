@@ -30,8 +30,8 @@
             {"tetrapak:reload", tetrapak_task_shell, "Reload changed modules"},
             {"tetrapak:startapp", tetrapak_task_shell, "Start the current application"},
             {"tetrapak:tpk-help", tetrapak_task_shell, "Show help for the tpk module"},
-            {"info:depsastree", tetrapak_task_info, "Get application deps as list-tree"},
-            {"info:depsaslist", tetrapak_task_info, "Get application deps as list-tree"},
+            {"info:deps", tetrapak_task_info, "Show application dependencies"},
+            {"info:deps:tree", tetrapak_task_info, "Show application dependencies as a tree"},
             {"test:ct", tetrapak_task_common_test, "Run unit tests with common_test"},
             {"clean:testlog", tetrapak_task_common_test, "Delete common_test HTML logs"}
            ]},
